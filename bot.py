@@ -15,7 +15,7 @@ from telegram.ext import (
 # ============================================================
 #  ⚙️  CONFIG
 # ============================================================
-BOT_TOKEN = "8757116951:AAGwrlY7ILI-i6-9tmzICjJI3mw6dk75xM0"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8757116951:AAGwrlY7ILI-i6-9tmzICjJI3mw6dk75xM0")
 OWNER_ID  = 5341425626
 
 ADMINS_FILE  = "data/admins.txt"
@@ -207,14 +207,14 @@ async def cmd_marker_aft(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_exp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_admin(uid):
-        await update.message.reply_text("❌ অ্যাডমিন পারমিশন নেই।"); return
+        await update.message.reply_text("❌ অ্যাডমিন পারমিশন নেই。"); return
     text = " ".join(ctx.args).strip()
     _EXP_PREFIX[uid] = text
     save_all()
     if text:
         await update.message.reply_text(f"✅ ব্যাখ্যার পরে যোগ হবে:\n`{text}`", parse_mode="Markdown")
     else:
-        await update.message.reply_text("✅ ব্যাখ্যার prefix সরানো হয়েছে।")
+        await update.message.reply_text("✅ ব্যাখ্যার prefix সরানো হয়েছে。")
 
 # ============================================================
 #  /pause & /resume
@@ -262,7 +262,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_permit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ শুধু Owner।"); return
+        await update.message.reply_text("❌ শুধু Owner。"); return
     if not ctx.args:
         await update.message.reply_text("`/permit <user_id>`"); return
     try:
@@ -324,7 +324,7 @@ async def cmd_rename(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid): return
     stored = get_file(uid)
     if not stored:
-        await update.message.reply_text("📎 আগে একটি ফাইল পাঠাও।"); return
+        await update.message.reply_text("📎 আগে একটি ফাইল পাঠাও。"); return
     if not ctx.args:
         await update.message.reply_text("`/rename <নতুন নাম>`"); return
     
@@ -344,46 +344,68 @@ async def cmd_rename(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     save_all()
 
 # ============================================================
-#  /convert — CSV → JSON
+#  /convert — CSV ↔ JSON (Both ways)
 # ============================================================
 async def cmd_convert(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_admin(uid): return
     stored = get_file(uid)
-    if not stored or stored["type"] != "csv":
-        await update.message.reply_text("📎 আগে একটি CSV ফাইল পাঠাও।"); return
+    if not stored:
+        await update.message.reply_text("📎 আগে CSV/JSON ফাইল পাঠাও।"); return
     
-    rows, headers = parse_csv_bytes(stored["data"])
+    if stored["type"] == "csv":
+        # CSV → JSON
+        rows, headers = parse_csv_bytes(stored["data"])
+        json_data = []
+        for idx, row in enumerate(rows, 1):
+            opts = get_options(row)
+            ans_label, _ = get_answer_label(row, opts)
+            exp = row.get("explanation", "").strip()
+            question_obj = {
+                "question_number": str(idx),
+                "question": row.get("questions", "").strip(),
+                "options": {
+                    "A": opts[0] if len(opts) > 0 else "",
+                    "B": opts[1] if len(opts) > 1 else "",
+                    "C": opts[2] if len(opts) > 2 else "",
+                    "D": opts[3] if len(opts) > 3 else ""
+                },
+                "correct_answer": ans_label,
+                "explanation": exp
+            }
+            json_data.append(question_obj)
+        result_bytes = json.dumps(json_data, ensure_ascii=False, indent=2).encode("utf-8")
+        new_name = stored["filename"].replace(".csv", ".json")
+        new_type = "json"
+        caption = f"✅ CSV → JSON\n📊 {len(rows)}টি প্রশ্ন"
+    else:
+        # JSON → CSV
+        json_data = json.loads(stored["data"].decode("utf-8"))
+        csv_buf = io.StringIO()
+        fieldnames = ["questions", "option1", "option2", "option3", "option4", "answer", "explanation"]
+        writer = csv.DictWriter(csv_buf, fieldnames=fieldnames)
+        writer.writeheader()
+        for item in json_data:
+            opts = item.get("options", {})
+            writer.writerow({
+                "questions": item.get("question", ""),
+                "option1": opts.get("A", ""),
+                "option2": opts.get("B", ""),
+                "option3": opts.get("C", ""),
+                "option4": opts.get("D", ""),
+                "answer": item.get("correct_answer", "A"),
+                "explanation": item.get("explanation", "")
+            })
+        result_bytes = csv_buf.getvalue().encode("utf-8-sig")
+        new_name = stored["filename"].replace(".json", ".csv")
+        new_type = "csv"
+        caption = f"✅ JSON → CSV\n📊 {len(json_data)}টি প্রশ্ন"
     
-    json_data = []
-    for idx, row in enumerate(rows, 1):
-        opts = get_options(row)
-        ans_label, _ = get_answer_label(row, opts)
-        exp = row.get("explanation", "").strip()
-        
-        question_obj = {
-            "question_number": str(idx),
-            "question": row.get("questions", "").strip(),
-            "options": {
-                "A": opts[0] if len(opts) > 0 else "",
-                "B": opts[1] if len(opts) > 1 else "",
-                "C": opts[2] if len(opts) > 2 else "",
-                "D": opts[3] if len(opts) > 3 else ""
-            },
-            "correct_answer": ans_label,
-            "explanation": exp
-        }
-        json_data.append(question_obj)
-    
-    json_bytes = json.dumps(json_data, ensure_ascii=False, indent=2).encode("utf-8")
-    json_name  = stored["filename"].replace(".csv", ".json")
-    
-    store_file(uid, json_bytes, json_name, "json")
-    
+    store_file(uid, result_bytes, new_name, new_type)
     await update.message.reply_document(
-        document=io.BytesIO(json_bytes),
-        filename=json_name,
-        caption=f"✅ JSON কনভার্ট!\n📊 প্রশ্ন: {len(rows)}টি"
+        document=io.BytesIO(result_bytes),
+        filename=new_name,
+        caption=caption
     )
 
 # ============================================================
@@ -759,7 +781,7 @@ async def poll_channel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = int(parts[3])
 
     if query.from_user.id != uid:
-        await query.answer("এটা তোমার সেশন না。", show_alert=True); return
+        await query.answer("এটা তোমার সেশন না।", show_alert=True); return
 
     session = _POLL_SESSION.get(uid)
     if not session:
@@ -843,7 +865,7 @@ async def csvS_channel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = int(parts[3])
 
     if query.from_user.id != uid:
-        await query.answer("এটা তোমার সেশন না。", show_alert=True); return
+        await query.answer("এটা তোমার সেশন না।", show_alert=True); return
 
     session = _POLL_SESSION.get(uid)
     if not session or not session.get("csvS_mode"):
@@ -898,6 +920,14 @@ def main():
     logger.info("🚀 Atlas Bot শুরু...")
     load_admins()
     load_all()
+    
+    # ✅ Python 3.14 Render fix
+    if sys.version_info >= (3, 14):
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+    
     app = Application.builder().token(BOT_TOKEN).connect_timeout(30).read_timeout(30).build()
     register_handlers(app)
     app.add_error_handler(error_handler)
